@@ -1,0 +1,28 @@
+WeChat local group digest
+
+Copyright 2026 zhzpolo
+
+The Windows raw-key scan strategy and SQLCipher page implementation are adapted
+and independently reimplemented in Python from:
+  jackwener/wx-cli-again
+  https://github.com/jackwener/wx-cli-again
+  commit 077a54cbfe679bda963cd038d8440422907fc797
+  src/scanner/windows.rs, src/scanner/mod.rs, src/crypto/mod.rs
+  Apache License 2.0; full upstream license: third_party/wx-cli-LICENSE.txt
+Changes: keys are never serialized; reads require exact HMAC; bounded read chunks;
+lazy page decryption; WAL checksums and transaction commits are verified; no
+plaintext database cache, daemon, account-wide export or outgoing messages.
+
+The MMV1 static-anchor discovery and optional master-key capture approach are
+informed by:
+  qiaodogbear/ChatTrace
+  https://github.com/qiaodogbear/ChatTrace
+  commit ea7c3986b4fc4fd8c467c5be829a4c954a6fe070
+  Copyright (c) 2026 Qiao Xinliang (qiaodogbear)
+  MIT License; full upstream license: third_party/ChatTrace-LICENSE.txt
+Changes: PE exception metadata determines function bounds; no copied version
+offsets, key store, memory dumps or full-database plaintext export.
+
+Protocol references: SQLCipher v4.6.1 src/sqlcipher.c (Zetetic), and the SQLite
+WAL file format specification. SQLite documentation is public domain. Reference
+material is recorded in docs/RESEARCH.md. No Weixin client code is redistributed.
