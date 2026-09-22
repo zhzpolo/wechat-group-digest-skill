@@ -8,6 +8,7 @@ import uuid
 from .messages import TZ, deduplicate, normalize, write_messages
 from .storage import database, snapshots
 from .windows import accounts, processes, extract_keys
+from .capture import capture_keys
 
 
 def columns(db, table):
@@ -102,7 +103,63 @@ def read_group(contact, shard_connections, group, window):
     return unique, audit, duplicate_count
 
 
-def export(group_name, window, output_root, account=None, pid=None, group_id=None, capture=None, capture_seconds=120, wait_for_close=False):
+def _wipe(keys):
+    for key in keys.values():
+        key[:] = bytes(len(key))
+
+
+def acquire_access(paths, pages, procs, capture=None, capture_seconds=120,
+                   restart_fallback=False, online_attempts=30):
+    """Prefer a verified online snapshot; restart only after bounded failure.
+
+    A usable online state requires both an encrypted snapshot that passes the
+    DB/WAL/SHM stability checks and a complete set of HMAC-verified keys. Keys
+    never leave mutable process memory. The fallback never kills WeChat: it
+    waits for the user to exit it from the tray, then instruments startup.
+    """
+    if online_attempts < 1:
+        raise ValueError('--online-attempts 必须大于 0')
+    if len(procs) > 1:
+        raise ValueError('微信主进程不唯一，请用 --pid 明确选择：' + str([p['pid'] for p in procs]))
+    online_reason = None
+    if procs:
+        print(f'优先在线读取：微信保持登录，最多进行 {online_attempts} 次稳定快照检查。', flush=True)
+        try:
+            copies = snapshots(paths, attempts=online_attempts)
+        except RuntimeError:
+            online_reason = f'连续 {online_attempts} 次未取得通过 DB/WAL/SHM 校验的稳定快照'
+        else:
+            try:
+                keys = extract_keys(procs[0]['pid'], pages)
+            except RuntimeError:
+                online_reason = '稳定快照已取得，但在线内存中未找到全部通过 HMAC 的数据库密钥'
+            else:
+                print('在线稳定快照与全部数据库密钥校验通过；无需退出微信。', flush=True)
+                return keys, copies, {'mode': 'online', 'online_attempts': online_attempts,
+                                      'restart_required': False, 'fallback_reason': None}
+    else:
+        online_reason = '微信当前未运行，无法进行在线读取'
+
+    if not restart_fallback:
+        raise RuntimeError(online_reason + '；本次未启用启动捕获降级，可添加 --restart-fallback 和 --capture')
+    if not capture:
+        raise ValueError('在线读取未满足完整条件，启动捕获降级需要 --capture ANCHORS_JSON')
+
+    print('在线读取未满足完整条件：' + online_reason, flush=True)
+    print('现在才进入退出降级流程；不会强制关闭微信，也不会保存密钥。', flush=True)
+    keys = capture_keys(procs[0]['pid'] if procs else 0, pages, capture,
+                        capture_seconds, wait_for_close=True)
+    try:
+        copies = snapshots(paths, attempts=online_attempts)
+    except BaseException:
+        _wipe(keys)
+        raise
+    return keys, copies, {'mode': 'startup_capture_fallback', 'online_attempts': online_attempts,
+                          'restart_required': True, 'fallback_reason': online_reason}
+
+
+def export(group_name, window, output_root, account=None, pid=None, group_id=None, capture=None,
+           capture_seconds=120, restart_fallback=False, online_attempts=30):
     roots = accounts()
     if account:
         chosen = Path(account).resolve()
@@ -115,7 +172,7 @@ def export(group_name, window, output_root, account=None, pid=None, group_id=Non
     procs = processes()
     if pid is not None:
         procs = [p for p in procs if p['pid'] == pid]
-    if len(procs) != 1 and not (wait_for_close and not procs):
+    if len(procs) != 1 and not (restart_fallback and not procs):
         raise ValueError('微信主进程不唯一，请用 --pid 明确选择：' + str([p['pid'] for p in procs]))
     # Exact salt + HMAC binds every retained key to this one account directory.
     shards = sorted(p for p in (chosen / 'message').glob('message_*.db') if re.fullmatch(r'message_\d+\.db', p.name))
@@ -126,13 +183,9 @@ def export(group_name, window, output_root, account=None, pid=None, group_id=Non
     pages = {}
     for path in paths:
         with path.open('rb') as f: pages[path.name] = f.read(4096)
-    if capture:
-        from .capture import capture_keys
-        keys = capture_keys(procs[0]['pid'] if procs else 0, pages, capture, capture_seconds, wait_for_close=wait_for_close)
-    else:
-        keys = extract_keys(procs[0]['pid'], pages)
+    keys, copies, access = acquire_access(paths, pages, procs, capture, capture_seconds,
+                                          restart_fallback, online_attempts)
     try:
-        copies = snapshots(paths, attempts=30)
         with ExitStack() as stack:
             opened = {p: stack.enter_context(database(copies[p], keys[p.name])) for p in paths}
             contact = opened[contact_path][0]
@@ -154,9 +207,10 @@ def export(group_name, window, output_root, account=None, pid=None, group_id=Non
                     'window': window, 'created_at': datetime.now(TZ).isoformat(), 'synthetic': False,
                     'reader': 'wechat_digest/Weixin4-strict', 'deduplicated_count': duplicates,
                     'raw_selected_count': sum(a['selected_rows'] for a in audit), 'shards': audit,
-                    'snapshots': capture, 'warnings': warnings, 'plaintext_database_files_created': 0}
+                    'snapshots': capture, 'access': access, 'warnings': warnings,
+                    'plaintext_database_files_created': 0}
         directory = Path(output_root) / (datetime.now(TZ).strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6])
         write_messages(directory, metadata, messages)
         return directory
     finally:
-        for key in keys.values(): key[:] = bytes(len(key))
+        _wipe(keys)

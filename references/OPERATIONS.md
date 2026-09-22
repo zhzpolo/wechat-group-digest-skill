@@ -6,6 +6,8 @@ The implementation targets 64-bit Windows desktop WeChat 4.x data under `xwechat
 
 Python 3.13 and installed Microsoft Edge are the tested environment. `doctor` discovers processes, account roots, packages, and Edge; it does not read chat text and does not prove compatibility.
 
+On 2026-09-22, a live online-only smoke test on the validated client obtained a stable encrypted snapshot while WeChat remained logged in, then stopped because the running process did not expose every HMAC-valid key. Restart fallback was disabled, so it neither prompted for exit nor attached startup capture. This verifies the fallback gate; it does not claim that this client can always complete an online export.
+
 ## Commands
 
 From the skill directory in PowerShell:
@@ -28,16 +30,18 @@ $env:PYTHONPATH = (Resolve-Path .\scripts)
 
 The DLL is often installed elsewhere. Discover the actual module path first; do not copy this example path blindly.
 
-Export with startup capture:
+Export with online-first access and an allowed startup fallback:
 
 ```powershell
 .\scripts\run.ps1 export --group "完整群名" `
-  --capture .\anchors-local.json --capture-seconds 600 --wait-for-close
+  --capture .\anchors-local.json --capture-seconds 600 --restart-fallback
 ```
 
-Add `--hours 48`, `--hours 72`, or explicit ISO-8601 `--start` and `--end`. Multiple accounts require `--account`; duplicate names require `--group-id` after presenting candidates to the user.
+Add `--hours 48`, `--hours 72`, or explicit ISO-8601 `--start` and `--end`. Multiple accounts require `--account`; duplicate names require `--group-id` after presenting candidates to the user. `--online-attempts` controls the bounded stable-snapshot checks and defaults to 30. The former `--wait-for-close` spelling remains an alias for `--restart-fallback`.
 
-When the command reports that it is waiting, ask the user to exit WeChat from the tray. The program waits rather than killing it, spawns the same executable suspended, installs the validated hook, resumes it, and waits for the user to log into the same account. Do not request password, QR content, SMS codes, or phone-confirmation details.
+The command first keeps WeChat online. It repeatedly verifies encrypted DB/WAL/SHM bytes and then checks whether all required keys are available and bound to their database by page-1 HMAC. If that complete online state succeeds, export proceeds without interruption.
+
+Only after the bounded online phase fails does the command report why and ask the user to exit WeChat from the tray. The program waits rather than killing it, spawns the same executable suspended, installs the validated hook, resumes it, and waits for the user to log into the same account. Do not request password, QR content, SMS codes, or phone-confirmation details. If `--restart-fallback` was not authorized, failure ends without prompting for exit.
 
 After export, read every batch and author `report.json` using [SUMMARIZING.md](SUMMARIZING.md), then:
 
@@ -48,6 +52,7 @@ After export, read every batch and author `report.json` using [SUMMARIZING.md](S
 ## Read and cleanup invariants
 
 - Original DB/WAL/SHM files are opened read-only. A double-read hash/stat/SHM check provides a stable optimistic snapshot; cross-database atomicity is not claimed.
+- Online success requires both a stable encrypted snapshot and all database keys passing page-1 HMAC. A stable snapshot alone is never treated as readable success.
 - WAL magic, header checksum, salts, rolling frame checksums, transaction commit markers, and final DB size are verified. Stale or uncommitted tails are excluded explicitly.
 - SQLCipher pages use 4096-byte pages and authenticated reserve data. Every page requested by SQLite must pass HMAC before decryption is returned.
 - Decrypted pages exist only in the process-backed VFS. No plaintext SQLite database is written. Python/runtime copies or OS swap cannot be promised to have forensic-grade erasure.
@@ -59,6 +64,6 @@ After export, read every batch and author `report.json` using [SUMMARIZING.md](S
 - No HMAC-valid candidate: stop; never guess a key or report zero messages as success.
 - A database key is missing: stop rather than export a partial shard set.
 - Unknown schema or missing required columns: inspect actual schema and add an explicit adapter; do not guess field names.
-- Snapshot changes repeatedly: stop and retry later rather than ignore WAL/SHM.
+- Snapshot changes repeatedly: exhaust the configured online attempts, then use the explicitly enabled restart fallback; never ignore WAL/SHM.
 - Duplicate server IDs with different content: stop for investigation.
 - PNG splitting: deliver every numbered part and its manifest; never silently crop.

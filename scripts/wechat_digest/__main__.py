@@ -20,9 +20,11 @@ def main():
     exp.add_argument('--start')
     exp.add_argument('--end')
     exp.add_argument('--output', default='outputs')
-    exp.add_argument('--capture', metavar='ANCHORS_JSON', help='显式启用经静态检查的开库捕获；需用户重新登录同一账号')
+    exp.add_argument('--capture', metavar='ANCHORS_JSON', help='在线读取失败后用于启动捕获的、经静态检查的本机 anchor')
     exp.add_argument('--capture-seconds', type=int, default=120)
-    exp.add_argument('--wait-for-close', action='store_true', help='等待本人从托盘退出后，自动启动微信，在启动开库前布置捕获')
+    exp.add_argument('--online-attempts', type=int, default=30, help='在线稳定快照的最大连续检查次数，默认 30')
+    exp.add_argument('--restart-fallback', '--wait-for-close', dest='restart_fallback', action='store_true',
+                     help='仅在线稳定快照或密钥验证失败后，提示从托盘退出并进行启动捕获')
     report = commands.add_parser('render', help='校验 Codex 撰写的 report.json 并渲染 HTML/Markdown/PNG')
     report.add_argument('directory', type=Path)
     batch = commands.add_parser('batch', help='完整输出一个批次，供 Codex 逐批阅读')
@@ -50,9 +52,10 @@ def main():
         if not name: raise ValueError('群名不能为空')
         window = time_window(args.hours,args.start,args.end)
         print('固定时间范围：',window['start'],'≤ 时间 <',window['end'],window['timezone'],flush=True)
-        if args.wait_for_close and not args.capture:
-            raise ValueError('--wait-for-close 需要 --capture')
-        result = export(name,window,args.output,args.account,args.pid,args.group_id,args.capture,args.capture_seconds,args.wait_for_close)
+        if args.restart_fallback and not args.capture:
+            raise ValueError('--restart-fallback 需要 --capture')
+        result = export(name,window,args.output,args.account,args.pid,args.group_id,args.capture,
+                        args.capture_seconds,args.restart_fallback,args.online_attempts)
         print('已导出全部选定消息：',result.resolve())
         print('下一步：让当前 Codex 会话阅读全部 batches 并撰写 report.json，然后运行 render。')
     elif args.command == 'render':

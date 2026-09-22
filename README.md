@@ -17,7 +17,7 @@ cd "$env:USERPROFILE\.codex\skills\wechat-group-digest"
 
 > 使用 $wechat-group-digest，总结微信群“完整群名”最近 24 小时的本地记录，并生成网页和长图。
 
-首次真实读取通常需要本人按提示从托盘退出微信，再登录同一账号。程序不会索要密码或手机确认信息。
+真实读取会先保持微信在线，连续检查加密数据库、WAL 与 SHM 是否形成稳定快照，并验证运行中能否取得全部数据库密钥。只有在线阶段在限定次数内不能同时满足“快照稳定 + 密钥 HMAC 通过”，才提示本人从托盘退出微信并自动启动捕获；程序不会强制关闭微信，也不会索要密码或手机确认信息。
 
 ## 当前验证范围
 
@@ -25,6 +25,7 @@ cd "$env:USERPROFILE\.codex\skills\wechat-group-digest"
 - Windows 微信 4.1.15.12；已验证的 DLL SHA-256 见 [操作说明](references/OPERATIONS.md)。其他构建必须重新生成并验证本地 anchor。
 - 虚构数据库覆盖页级 HMAC、WAL 提交边界、秒/毫秒时间戳、跨分片、去重、引用、媒体标记、HTML 手机/桌面排版和 PNG 分图。
 - 一次真实端到端验证覆盖六个加密数据库、五个消息分片、精确群 ID、固定 24 小时窗口、全部批次总结和离线渲染。公开仓库不含真实群名、群 ID、消息、账号路径或数据库摘要。
+- v0.2 的默认流程优先在线稳定快照；`--restart-fallback` 仅授权在线失败后的退出降级。输出元数据记录实际采用 `online` 或 `startup_capture_fallback`。
 
 详细流程由 [SKILL.md](SKILL.md) 驱动。人工运行命令、失败规则和隐私边界见 [OPERATIONS.md](references/OPERATIONS.md)，研究来源见 [RESEARCH.md](references/RESEARCH.md)。
 
